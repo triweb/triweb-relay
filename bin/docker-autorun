@@ -1,0 +1,81 @@
+#!/bin/bash
+
+bold=$(tput bold)
+reset=$(tput sgr0)
+
+set -e
+
+# Default to production mode
+MODE=${MODE:-production}
+
+# Generate a self-signed certificate for this server to use as a fallback when LetsEncrypt fails
+if [ ! -f /data/resty-auto-ssl-fallback.key ]; then
+	printf "\n${bold}# Generating a fallback SSL certificate...${reset}\n"
+	openssl req -new -newkey rsa:2048 -days 3650 -nodes -x509 \
+    -subj '/CN=triweb.invalid' \
+    -keyout /data/resty-auto-ssl-fallback.key \
+    -out /data/resty-auto-ssl-fallback.crt
+fi
+
+# Start local Redis server
+printf "\n${bold}# Starting Redis server...${reset}\n"
+REDIS_DISABLE_COMMANDS=FLUSHDB,FLUSHALL,INFO redis-server --appendonly yes --dir /data --daemonize yes
+
+# Start Openresty web server with the correct (development/production) configuration
+printf "\n${bold}# Starting OpenResty server...${reset}\n"
+
+pushd .
+
+# Check if the MODE variable is either 'development' or 'production'
+if [[ "$MODE" != "development" && "$MODE" != "production" ]]; then
+  echo "Error: Invalid MODE value. Only 'development' or 'production' are allowed."
+  exit 1
+fi
+
+# Navigate to the directory containing openresty config files
+cd /etc/openresty/includes
+
+# Iterate over the files matching the pattern and copy them
+for file in *.$MODE; do
+  if [[ -f "$file" ]]; then
+    base="${file%.$MODE}"
+    cp "$file" "$base"
+  fi
+done
+
+# Check ALLOWED_DOMAINS
+if [ "$ALLOWED_DOMAINS" = "*" ]; then
+  printf "\nWarning: This server is an open relay and will handle all domain names.\n"
+else
+  printf "\nThis server will relay only the following domain names: ${ALLOWED_DOMAINS}.\n"
+fi
+
+# Check RELAY_ADDRESS and perform autodetect if needed
+if [ "$RELAY_ADDRESS" = "*" ]; then
+  printf "\nWarning: This server will not validate domain configuration before attempting to get a SSL certificate for it issued.\n"
+
+elif [ "$RELAY_ADDRESS" = "autodetect" ]; then
+  printf "\nAutodetecting the relay public ip address via icanhazip.com...\n"
+  ipv4=`curl -s -4 icanhazip.com | awk '{printf "%s", $0}'`
+  if [ -n "$ipv4" ]; then
+    printf -- "- RELAY_ADDRESS set to ${ipv4}\n"
+    export RELAY_ADDRESS="$ipv4"
+  else
+    printf -- "- [ERROR] Could not autodetect the public IP address. The relay will not issue SSL certificates. Please set the RELAY_ADDRESS manually.\n"
+  fi
+
+else
+  printf "\nThis relay will auto-issue SSL certificates only for domains that point at the following IP addresses: '${RELAY_ADDRESS}'.\n"
+
+fi
+
+# Start the openresty web server
+openresty
+
+printf "\n${bold}# (✓) OpenResty started and listening for connections${reset}\n"
+
+#printf "\n${bold}# Starting the triweb-relay...${reset}\n"
+#
+## cd /srv/triweb-relay && /usr/bin/coffee ./triweb-relay.coffee
+
+while true; do sleep 1; done

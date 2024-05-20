@@ -1,0 +1,84 @@
+#!/bin/bash
+#/ Usage: ./bin/run [OPTIONS] ALLOWED_DOMAINS RELAY_ADDRESS
+#/
+#/ Builds a triweb-relay:latest docker image and runs it.
+#/ This script will also check if docker is properly installed, and will guide the user through its installation.
+#/
+#/ OPTIONS:
+#/   -h | --help         Print this help screen and exit.
+#/   -d | --development  Run in development mode.
+#/   -i | --interactive  Run in interactive mode.
+#/
+#/ ARGUMENTS:
+#/   ALLOWED_DOMAINS  A comma-separated list of domains which this relay server will handle. Defaults to '*'.
+#/   RELAY_ADDRESS    A comma-separated list of IP addresses under which this relay is available to the outside world. Defaults to 'autodetect'.
+
+set -e
+
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+  grep '^#/' < "$0" | cut -c4-
+  exit 2
+fi
+
+# Manual parsing of arguments
+
+MODE="production"
+DOCKER_RUN_OPTIONS="--detach --restart unless-stopped"
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -h|--help)
+      grep '^#/' < "$0" | cut -c4-
+      exit 2
+      ;;
+    -d|--development)
+      MODE="development"
+      shift
+      ;;
+    -i|--interactive)
+      DOCKER_RUN_OPTIONS="-it"
+      shift
+      ;;
+    *)
+      # Assuming only non-option arguments are left
+      ALLOWED_DOMAINS=$1
+      RELAY_ADDRESS=$2
+      break
+      ;;
+  esac
+done
+
+if [ -z "$ALLOWED_DOMAINS" ]  || [ "$ALLOWED_DOMAINS" = "*" ]; then
+  printf "\nWarning: ALLOWED_DOMAINS argument was not provided or is '*'. This will make this instance an open-relay that works for all domain names that have TXT records under _triweb. subdomain.\n\n"
+  ALLOWED_DOMAINS="*"
+fi
+
+if ! [ -x "$(command -v docker)" ]; then
+  echo -e "Error: docker command not found.\n\nPlease install the docker.io package with:\ncd /tmp && curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh ./get-docker.sh\n\nSee https://docs.docker.com/engine/install/ for other installation methods." >&2
+  exit 1
+fi
+
+if [ "$(whoami)" != "root" ] && [ ! -w /var/run/docker.sock ]; then
+	echo -e "Warning: Docker requires root-like privileges and will likely not run.\n\nPlease add the current user to the docker group with:\nsudo groupadd -f docker ; sudo usermod -aG docker $USER ; newgrp docker\n\nSee https://linuxhandbook.com/docker-permission-denied/ for more information.\n"
+fi
+
+# Build the docker image from source and tag it as triweb-relay.
+docker build \
+  --tag triweb-relay \
+  .
+
+# Run the freshly build triweb-relay:latest image as triweb-relay docker container, with appropriate local port mapping.
+docker stop triweb-relay || true
+docker rm triweb-relay || true
+docker run \
+  ${DOCKER_RUN_OPTIONS} \
+  -p 80:80 \
+  -p 443:443 \
+  --volume data:/data \
+  --name triweb-relay \
+  --net host \
+  --env ALLOWED_DOMAINS="${ALLOWED_DOMAINS}" \
+  --env RELAY_ADDRESS="${RELAY_ADDRESS}" \
+  --env MODE="${MODE}" \
+  triweb-relay:latest
+ 

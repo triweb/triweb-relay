@@ -1,0 +1,132 @@
+#!/bin/bash
+#/ Usage: ./bin/deploy [OPTIONS] user@hostname:/path [ALLOWED_DOMAINS]
+#/
+#/ Deploys the local source code into the selected deployment path on a remote machine,
+#/ and then builds and runs the triweb-relay docker container from the copied source code,
+#/ on the remote machine, in an interactive session.
+#/
+#/ EXAMPLE:
+#/   ./bin/deploy [OPTIONS] username@remotehost.example:/srv/triweb-relay
+#/
+#/ OPTIONS:
+#/   -s | --setup         Perform initial setup by installing required system packages on the remote machine.
+#/   -d | --development   Deploy in development mode with localhost tunnels for triweb.js.
+#/   -i | --interactive   Deploy in interactive mode. Once you exit the interactive session, the server will terminate.
+#/   -h | --help          Print this help screen and exit.
+#/
+#/ ARGUMENTS:
+#/  user@hostname:/path   An remote username, host, and path under which you want to deploy triweb-relay container
+#/  ALLOWED_DOMAINS       An optional, comma-separated list of domain names that this relay should handle.
+#/  RELAY_ADDRESS         An optional, comma-separated list of public IP addresses of this relay.
+
+bold=$(tput bold)
+reset=$(tput sgr0)
+
+set -e
+
+if [ "$1" = "--help" ] || [ "$1" = "-h" ] || [ "$#" = 0 ]; then
+  grep '^#/' < "$0" | cut -c4-
+  exit 2
+fi
+
+pushd .
+
+# Initialize flags and variables
+SETUP_FLAG=0
+RUN_OPTIONS=""
+
+# Manual parsing of arguments
+while [[ $# -gt 0 && $1 == -* ]]; do
+  case $1 in
+    -h|--help)
+      grep '^#/' < "$0" | cut -c4-
+      exit 2
+      ;;
+    -s|--setup)
+      SETUP_FLAG=1
+      shift
+      ;;
+    -d|--development)
+      RUN_OPTIONS="${RUN_OPTIONS} -d"
+      shift
+      ;;
+    -i|--interactive)
+      RUN_OPTIONS="${RUN_OPTIONS} -i"
+      shift
+      ;;
+    *)
+      # Display an error message for unrecognized flags
+      echo "Error: unrecognized option $1"
+      exit 1
+      ;;
+  esac
+done
+
+
+function validate_host {
+  if [ -z "$HOST" ]; then
+    printf "Error: Please provide a remote host to work on e.g.,\n\n./bin/deploy -s me@host.example\n./bin/deploy me@host.example:/srv/triweb-relay\n"
+    exit 1
+  fi
+}
+
+HOST=$(echo $1 | cut -d ":" -f 1)
+validate_host
+
+if [[ $SETUP_FLAG -eq 1 ]]; then
+  printf "${bold}#\n# Preparing remote ${HOST} ...\n#\n\n${reset}"
+
+  ssh -t ${HOST} << EOF
+
+    bold=$(tput bold);
+
+    printf "${bold}# Installing required system packages\n${reset}"
+    sudo apt install -y rsync
+
+    if ! [ -f "/usr/bin/docker" ]; then
+      printf "\n${bold}# Installing docker.io from https://get.docker.com\n${reset}\n"
+      (cd /tmp && curl -fsSL https://get.docker.com -o get-docker.sh && sudo sh ./get-docker.sh);
+    fi
+
+    if [ "$(whoami)" != "root" ] && [ ! -w /var/run/docker.sock ]; then
+      printf "\n${bold}# Ensuring /var/run/docker.sock is writeable by the current user\n${reset}\n"
+      (sudo groupadd -f docker ; sudo usermod -aG docker $USER ; newgrp docker);
+    fi
+
+    printf "\n${bold}# Initial setup complete${reset}\n\nYou can now use './bin/deploy ${HOST}:/srv/triweb-relay' to deploy the triweb-relay to the remote.\n\n"
+
+EOF
+
+  exit 0
+fi
+
+DIR=$(echo $1 | cut -d ":" -f 2)
+DEFAULT_DIR="/tmp/triweb-relay"
+
+ALLOWED_DOMAINS=$(echo $2)
+if [ -z "$ALLOWED_DOMAINS" ]; then
+  ALLOWED_DOMAINS="*"
+fi
+
+RELAY_ADDRESS=$(echo $3)
+if [ -z "$RELAY_ADDRESS" ]; then
+  RELAY_ADDRESS="autodetect"
+fi
+
+if [ -z "$DIR" ] || [ "$HOST" = "$DIR" ]; then
+  echo "Warning: Deployment directory not specified. Deploying to $DEFAULT_DIR"
+  DIR="$DEFAULT_DIR"
+fi
+
+printf "${bold}#\n# Deploying to ${HOST} under path ${DIR}\n#\n${reset}"
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+cd ..
+
+printf "\n${bold}## Copy files\n${reset}"
+rsync -avz --progress --exclude=".git/*" --exclude="node_modules/*" . ${HOST}:${DIR}
+
+printf "\n${bold}## Executing ./bin/run ${RUN_OPTIONS} '${ALLOWED_DOMAINS}' '${RELAY_ADDRESS}'\n${reset}"
+ssh -t ${HOST} "cd ${DIR} && ./bin/run ${RUN_OPTIONS} '${ALLOWED_DOMAINS}' '${RELAY_ADDRESS}'"
+
+popd

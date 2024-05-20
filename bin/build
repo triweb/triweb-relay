@@ -1,0 +1,33 @@
+#!/bin/bash
+#/ Usage: ./bin/build [OPTIONS]
+#/
+#/ Builds and saves the docker image into the dist/triweb-relay.tar.gz file.
+#/ Such file can be later copied to another machine and loaded with docker load.
+#/
+#/ OPTIONS:
+#/   -h | --help    Print this help screen and exit.
+
+bold=$(tput bold)
+reset=$(tput sgr0)
+
+set -e
+
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+  grep '^#/' < "$0" | cut -c4-
+  exit 2
+fi
+
+pushd .
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+cd ..
+
+mkdir -p dist/
+
+printf "\n${bold}Building the triweb-relay docker image\n${reset}"
+docker build -t triweb-relay .
+
+printf "\n${bold}Saving the triweb-relay image into ./dist/triweb-relay.tar.gz\n${reset}"
+docker save triweb-relay:latest | gzip > ./dist/triweb-relay.tar.gz
+
+popd

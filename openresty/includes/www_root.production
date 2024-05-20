@@ -1,0 +1,11 @@
+# Proxy endpoint for triweb container management code
+# @see
+location /.../ {
+  alias /srv/triweb/dist/;
+
+  add_header Strict-Transport-Security "max-age=63072000";
+  add_header X-Frame-Options "deny";
+  add_header Cross-Origin-Opener-Policy "same-origin";
+
+  add_header Service-Worker-Allowed /;
+}
